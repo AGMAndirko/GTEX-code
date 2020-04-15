@@ -5,25 +5,7 @@ date: 2020
 contact: cedric.boeckx@ub.edu
 ---
 
-This markdown document contains all the code necessary to replicate the manuscript "Differential gene regulation by Homo sapiens-specific alleles in brain tissues: implications for brain evolution", including figures. Materials and other information not included here can be retrieved from the github repository.
-
-#Folder structure
-eQTL
-  ├─ hsap         #contains the files resulting from combining the GTEX and Homo sapiens variation databases
-  ├─ materials    #contains raw and preprocessed files   
-  │   └── GTEx_Analysis_v8_eQTL
-  │   └── permutations #files for permutation tests (positive selection)
-  └─ postprocessing                                             
-      ├── clinvar # contains the results of crossing with clinvar data
-      ├── clumped # SNP clumping analysis
-      ├── gwas    # GWAS data 
-           ├── gwascat      # data from the NHGRI-EBI GWAS catalog
-      └── plots   # contains files with specific information for plotting
-           ├── circos 
-           ├── conseqs
-           └── TSS
-
-
+This markdown document contains all the code necessary to replicate the manuscript "Differential gene regulation by Homo sapiens-specific alleles in brain tissues: implications for brain evolution", including figures. 
 
 #Materials
 Creates some of the parent directories for the project, and download the original list of variants from Kuhlwilm & Boeckx (2019), as well as the list of GTEX significant variants.
@@ -113,7 +95,7 @@ split --number=l/6 ${fspec} GTEx_lookup_table_filtd.txt
 rm GTEx_lookup_table.txt GTEx_lookup_table_filtd.txt
 mkdir splitlookup && mv xaa xab xac xad xae xaf splitlookup/
 
-# An awk loop to add the rsID to all files. Divided due to computer memory problems.
+# An awk loop to add the rsID to all files. Divided due to computer memory limitations.
 for i in *.txt; do
     awk 'FNR==NR{a[$1]=$7;next} ($1 in a) {print $1,a[$1],$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}' splitlookup/xaa $i >> $i.out
     awk 'FNR==NR{a[$1]=$7;next} ($1 in a) {print $1,a[$1],$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}' splitlookup/xab $i >> $i.out
@@ -256,8 +238,6 @@ rm -r plink* toy* LICENSE prettify clumped/
 
 ```
 
-Recheck because it really doesn't work
-
 ```sh
 #Extract clumped rsIDs: Necessary for clinvar and some of the plots
 for fold in */; do
@@ -327,8 +307,6 @@ rm !(*.cvar)
 
 #Visualizations
 ##Plots 1 and 2.
-**Add K-S test, chi-square and the down-up plot vs all
-Get dead code out**
 
 ```r
 library(readr)
@@ -451,7 +429,6 @@ binom.test(all$Up[15], c(all$Up[15]+all$Down[15]), 0.5)
 
 ```
 
-# Genes ~ SNPs
 
 # Circos
 ```sh
@@ -488,14 +465,13 @@ echo -e 'chr\tstart\tend\tvalue'| cat - circos_data > temp && mv temp circos_dat
 ```
 
 Now you can input `circos_data` into `circos`. See the `circos` folder for the rest of configuration files.
-**INCLUDE ALSO CONF FILES**
 
 # Permutation tests
 ```sh
 #From eQTL:
 cd materials && mkdir permutations && cd permutations
 ```
-This folder (`permutations`) should include the **Peyregne and Racimo** data (see references) - included in the github repository for convenience. You can contrast this data with the originals in the respective articles. Once you have them:
+This folder (`permutations`) should include the **Peyregne and Racimo** data from their respective articles (see references) - included in the github repository for convenience. Once you have them:
 
 ```sh
 #From `permutations` folder
@@ -506,8 +482,6 @@ cp postprocessing/plots/circos/circos_data materials/permutations/
 awk '{print $1, $2, $3}' circos_data | sed 's/hs/chr/g' > snppermut.txt
 rm circos_data racimo_coords.txt peyregne_coords.txt
 ```
-
-Now, in R...
 
 ```r
 library(readr)
@@ -626,94 +600,6 @@ ggplot(plotinput, aes(x = consequence_type_tv, y = plotinput$freq)) +
   scale_x_discrete(labels = labelsx)
 ```
 
-## Variant dating #Two R codes for these: check which one to use
-With unclumped data
-
-```sh
-#From eQTL
-mkdir postprocessing/dating && cd postprocessing/dating
-
-#run provided datingdownload.sh script in this folder
-awk '{print $2}' hsap/* > postprocessing/dating/rsids
-cd postprocessing/dating/rsids/
-# Removes duplicates
-sort -u rsids | uniq > uniqrs.txt
-
-# 
-grep -w -f uniqrs.txt *.csv >> dated_uniq.txt
-rm uniqrs.txt
-
-#For each tissue
-for i in hsap/*.rs;do
-  awk '{print $2}' $i > $i.dat
-  mv $i.dat postprocessing/dating/
-done
-
-cd postprocessing/dating
-for file in *.dat; do
-  sudo rename 's/v8.*.dat/v8.dat/' $file
-done
-  
-for file in *.dat; do
-  sort -u $file | uniq > $file.txt
-  grep -w -f $file.txt *.csv >> $file.tiss
-  rm $file.txt $file.tiss
-done
-
-```
-
-```r
-library(readr)
-library(ggplot2)
-library(viridis)
-library(reshape2)
-library(kSamples)
-
-setwd("~/v8/version4/eQTL/postprocessing/dating/")
-
-temp = list.files(pattern="*.tiss")
-myfiles = lapply(temp,
-                 read_table2,
-                 col_names = FALSE)
-
-#Prepare the data for plotting
-dates <- NULL
-dates <- lapply(myfiles, subset, X7 == "Combined,")
-dates <- lapply(dates, '[', "X23")
-dates <- melt(dates)
-
-#Change the names of variables
-dates[dates=="1"]<-"Adrenal gland"
-dates[dates=="2"]<-"Amygdala"
-dates[dates=="3"]<-"BA24"
-dates[dates=="4"]<-"Caudate"
-dates[dates=="5"]<-"Cereb. Hemisph."
-dates[dates=="6"]<-"Cerebellum"
-dates[dates=="7"]<-"Cortex"
-dates[dates=="8"]<-"BA9"
-dates[dates=="9"]<-"Hippocampus"
-dates[dates=="10"]<-"Hypothalamus"
-dates[dates=="11"]<-"Nucleus accumbens"
-dates[dates=="12"]<-"Putamen"
-dates[dates=="13"]<-"Spinal cord"
-dates[dates=="14"]<-"Subs. Nigra"
-dates[dates=="15"]<-"Pituitary"
-
-
-ggplot(dates, aes(value*25, color = dates$L1))+
-  facet_grid(L1 ~ ., scales = "free") +
-  theme_minimal() +
-  geom_freqpoly(stat = "bin", bins = 300) +
-  theme(strip.text.y = element_blank()) +
-  #stat_bin(bin = 40)+
-  theme(legend.position="right") +
-  #theme(legend.title = element_text("Tissue")) +
-  labs(color = "Tissue") +
-  labs(x = "Years", y = "Variant count")
-
-```
-
-
 ## Heatmap plot
 ```r
 library(readr)
@@ -800,17 +686,6 @@ ggplot(what, aes(x = V2, y = V1, fill = out3)) +
   
   
 
-```
-
-**DEADCODE**
-
-```r
-#ord <- hclust(dist(what))$order 
-#what$V1 <- what[ord,] # re-order matrix accoring to clustering
-#what$V1 <- as.factor(what$V1, levels = ord)
-#what$V1 <- factor(what$V1, levels = ord)
-#what$V1
-#ord <- levels(what)
 ```
 
 # GO analysis
@@ -929,27 +804,7 @@ intersect(rsids[[15]][[1]], gwas[[22]])
 ```
 
 
-##?. Neale
-Download all GWAS sumstat results from the Neale webpage: see **attached neale.sh** script.
-
-```sh
-cd ~/eQTL/postrocessing/gwasneale 
-#Download and run neale.sh (not included here for readability reasons, but provided in the article's github page)
-
-for i in *.bgz; do
-  dir="${i%.*}"
-  gunzip -c $i > $dir
-done
-
-```
-
-
-```sh
-# Positive selection
-
-```
-**ADD POSITIVE SELECTION TABLES**
-
+# Positive selection permutations
 
 ```sh
 #From eQTL
@@ -964,8 +819,7 @@ bedtools intersect -a coords.bed -b racimo_coords.txt > ps_rac
 
 ```
 
-Should I include this section?
-
+Gene name retrieval:
 ```r
 library(gprofiler2)
 library(readr)
