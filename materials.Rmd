@@ -1,0 +1,98 @@
+---
+title: Modern human alleles differentially regulate gene expression in brain tissues - implications for brain evolution
+authors: Alejandro Andirkó, Cedric Boeckx
+date: 2020
+contact: munoz.andirko@ub.edu
+---
+
+This document contains all the code necessary to set up the data of the "Modern human alleles differentially regulate gene expression in brain tissues: implications for brain evolution" manuscript, including:
+
+1. Kuhlwilm & Boeckx (2019)'s data
+2. GTEx database
+3. RSid harmonization
+
+# Directories, downloads, rsID harmonization
+
+```sh
+#Create directories
+cd data
+mkdir eQTL && cd eQTL
+mkdir materials hsap
+
+echo "Retrieving Kuhlwilm & Boeckx's (2019) processed data..."
+echo ""
+#Get Kuhlwilm & Boeckx's (2019) data (already in 90% cutoff)
+cd materials
+wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1mtd-feRUhXLhm5oJOvH7C0LKaRR98BID' -O Na_high_freq.tsv
+echo "Done!"
+echo ""
+
+echo "Retrieving GTEX data (v8)..."
+echo ""
+#Get GTEX data (v8)
+#Listed as "eGene and significant variant-gene associations based on permutations" in https://gtexportal.org/home/datasets
+#Note that this link will direct you to the last version of the dataset - results may vary
+wget https://storage.googleapis.com/gtex_analysis_v8/single_tissue_qtl_data/GTEx_Analysis_v8_eQTL.tar
+tar xf GTEx_Analysis_v8_eQTL.tar && rm GTEx_Analysis_v8_eQTL.tar
+
+#Remove all non-brain tissues (minus Adrenal gland) - see justification in the article
+cd GTEx_Analysis_v8_eQTL
+rm -v !(Brain*|Adrenal*)
+rm -v !(*pairs*)
+gzip -d * & cd ..
+echo "Done!"
+echo ""
+
+cd data/eQTL/materials/GTEx_Analysis_v8_eQTL
+
+echo "Downloading lookup table..."
+echo ""
+#Download, decompress, change name for convenience
+wget https://storage.googleapis.com/gtex_analysis_v8/reference/GTEx_Analysis_2017-06-05_v8_WholeGenomeSeq_838Indiv_Analysis_Freeze.lookup_table.txt.gz
+gzip -d GTEx_Analysis_2017-06-05_v8_WholeGenomeSeq_838Indiv_Analysis_Freeze.lookup_table.txt.gz
+mv GTEx_Analysis_2017-06-05_v8_WholeGenomeSeq_838Indiv_Analysis_Freeze.lookup_table.txt GTEx_lookup_table.txt
+
+# Pruning out those without rsID, which include an otherwise inexistent "." instead of the pertinent rsid
+grep -v "\." GTEx_lookup_table.txt > GTEx_lookup_table_filtd.txt
+echo "Done!"
+echo ""
+
+echo "Adding rs IDs..."
+echo ""
+#Split GTEx_lookup_table_filtd.txt in four more manageable files for the awk array of the next step to work without depleting memory
+split --number=l/6 ${fspec} GTEx_lookup_table_filtd.txt
+rm GTEx_lookup_table.txt GTEx_lookup_table_filtd.txt
+mkdir splitlookup && mv xaa xab xac xad xae xaf splitlookup/
+
+# An awk loop to add the rsID to all files. Divided due to computer memory limitations.
+for i in *.txt; do
+    awk 'FNR==NR{a[$1]=$7;next} ($1 in a) {print $1,a[$1],$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}' splitlookup/xaa $i >> $i.out
+    awk 'FNR==NR{a[$1]=$7;next} ($1 in a) {print $1,a[$1],$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}' splitlookup/xab $i >> $i.out
+    awk 'FNR==NR{a[$1]=$7;next} ($1 in a) {print $1,a[$1],$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}' splitlookup/xac $i >> $i.out
+    awk 'FNR==NR{a[$1]=$7;next} ($1 in a) {print $1,a[$1],$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}' splitlookup/xad $i >> $i.out
+    awk 'FNR==NR{a[$1]=$7;next} ($1 in a) {print $1,a[$1],$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}' splitlookup/xae $i >> $i.out
+    awk 'FNR==NR{a[$1]=$7;next} ($1 in a) {print $1,a[$1],$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}' splitlookup/xaf $i >> $i.out
+done
+rm -r splitlookup *.txt
+cd ../..
+echo "Done!"
+echo ""
+
+#Here (hsap/) we will store the product of crossing GTEx and the Homo Sapiens high frequency mutations database
+# From the main eQTL/ directory:
+echo "Storing the product of crossing GTEx and the Homo Sapiens high frequency mutations database..."
+cd data/eQTL/ && cp materials/GTEx_Analysis_v8_eQTL/* hsap/
+cp materials/hfsapiens.freqfilt.tsv hsap/ && cd hsap
+
+#Print the rsids only and clean missing rsIDS
+awk '{print $19}' hfsapiens.freqfilt.tsv | sed 's/-//g' | sed 's/,/\n/g' | sed '/^$/d' > hfsapiens.rsids
+
+for i in *.out; do
+    fgrep -w -f hfsapiens.rsids $i > $i.rs
+done
+
+rm *.txt.out
+rm hf*
+echo "Done!"
+echo ""
+```

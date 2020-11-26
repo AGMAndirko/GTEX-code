@@ -1,0 +1,1084 @@
+---
+title: Modern human alleles differentially regulate gene expression in brain tissues - implications for brain evolution
+subtitle: Plots, statistics
+authors: Alejandro Andirkó, Cedric Boeckx
+date: 2020
+contact: munoz.andirko@ub.edu
+--- 
+
+
+This document contains all the code necessary to plot and analyse the data from the "Modern human alleles differentially regulate gene expression in brain tissues: implications for brain evolution" manuscript. Please run the blocks from `materials.Rmd` before this one.
+
+# R data and dependencies setup
+
+Change working directory to whichever directory you are using to replicate the project:
+```{r packages, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ggpubr)
+library(cowplot)
+library(reshape2)
+library(knitr)
+library(sanzo)
+library(ggrepel)
+library(gassocplot)
+library(gwasglue)
+library(coloc)
+library(pwr) #power tests
+library(wmwpow) #power test wilcoxon
+library(EnvStats)
+library(FSA)
+library(outliers) 
+library(statmod)
+library(pheatmap)
+library(usedist)
+library(viridis)
+library(chisq.posthoc.test)
+library(ieugwasr)
+library(S4Vectors)
+library(gprofiler2)
+library(biomaRt)
+library(effectsize)
+library(regioneR)
+library(rtracklayer)
+library(BSgenome.Hsapiens.UCSC.hg19.masked)
+  
+#change to your project directory
+opts_knit$set(root.dir = "/media/sandor/c21e866e-0b3b-40be-a6ba-8cd9c93c15441/work/GTEX/now/data/")
+
+#Imports a list of dfs with the HF, derived files
+temp <- list.files(path = "eQTL/hsap/", pattern="*")
+hsap_files <- lapply(paste0("eQTL/hsap/",temp),
+                 read_table2, 
+                 col_names = FALSE)
+
+#Seed for reproducibility
+set.seed(1)
+
+#Clean names - used for plots mostly
+cleannames <- function (listfiles){
+  listfiles <- lapply(listfiles, str_remove_all, ".v8.*")
+  listfiles <- lapply(listfiles, str_replace_all, "_", " ")
+  unlist(listfiles)
+}
+
+#Splits in up and downregulation
+divide <- function(x) {
+  split(x,  x$X9 > 0 )
+}
+
+#Transform wide data on up-down regulation figure for stats
+statsdf <- function(input){
+  df <- input %>% 
+  spread(direction, value)
+  df <- as.data.frame(df) 
+  rownames(df) <-  cleannames(temp)
+  df <- df[,-1]
+  return(df)
+}
+
+regular_clump <- function(input) {
+  #Getting rsids and p-values for clumping function itself to work
+  data <- NULL
+  data <- lapply(input, '[', "X2")
+  names(data) <- cleannames(temp)
+  data <- melt(data)
+  data$pval <- unlist(lapply(input, '[', "X13"))
+  #Factors
+  data <- mutate(data, L1 = factor(L1, ordered=T))
+  colnames(data) <- c("rsid", "tissue", "pval")
+  clumped <- ld_clump(dat = data, clump_r2 = 0.1, clump_kb = 1000000) #Uses EUR for reference, r2 = 0.001
+  return(clumped)
+}
+
+#Similar to before, but with unique elements step
+uniq_clump <- function(input) {
+  data <- NULL
+  data <- lapply(input, '[', "X2")
+  temp <- cleannames(temp)
+  names(data) <- stringr::str_replace_all(temp, "Brain ", "")
+  data <- melt(data)
+  data$pval <- unlist(lapply(input, '[', "X13"))
+  #Factors
+  data <- mutate(data, L1 = factor(L1, ordered=T))
+  #Gets unique elements for each tissue
+  uniq <- data %>%  
+    full_join(data, by="X2") %>% 
+    group_by(X2) %>% 
+    filter(n() == 1)  
+  uniq <- uniq[1:3]  
+  colnames(uniq) <- c("rsid", "tissue", "pval")
+  uniq_clumped <- ld_clump(dat = uniq, clump_r2 = 0.1, clump_kb = 1000000) #Uses EUR for reference, r2 = 0.001
+  return(uniq_clumped)
+}
+
+#Get number of up and down-regulating variants ; store in all df
+preplot_count <- function(dataset) {
+  up <- NULL
+  down <- NULL
+  unfilt <- NULL
+  for (i in 1:15){
+    up <- append(up, length(dataset[[i]][["TRUE"]]))
+    down <- append(down, length(dataset[[i]][["FALSE"]]))
+    unfilt <- append(unfilt, length(dataset[[i]][["FALSE"]])+length(dataset[[i]][["TRUE"]]))
+  }
+  #all is a tidy df containing with the number of up and downregulating eQTL
+  all$Up <- up
+  all$Down <- down
+  allp <- melt(all)
+  return(allp)
+}
+
+# A specific fill plot that get's repeated over the code a couple times
+plot_updown <- function(dataset, title) {
+  ggplot() +
+    theme_minimal() +
+    ggtitle(title)+
+    geom_bar(aes(y = value, x = tissue, fill = variable), 
+             data = dataset, 
+             stat= "identity",
+             position="fill",
+             alpha = 0.75)+
+    labs(y = "Percentage", x = "", fill = "") +
+    scale_y_continuous(labels = scales::percent_format()) +
+    scale_fill_manual(values = sanzo.duo("c106")) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    geom_hline(yintercept=0.50, linetype="dashed") 
+}
+
+```
+  
+# Visualizations
+
+## TSS 
+```{r TSS plot}
+sh <- 'awk \'{print $2, $4}\' eQTL/materials/GTEx_Analysis_v8_eQTL/* > TSS_unfilt'
+system(sh, intern = TRUE)
+
+sh <- 'awk \'{print $2, $4}\' eQTL/hsap/* > TSS_gtex'
+system(sh, intern = TRUE)
+
+alltss <- read_table2("TSS_unfilt") #Change to your path
+gtextss <- read_table2("TSS_gtex", col_names = FALSE) #Change to your path
+
+ggplot(alltss, aes(x=alltss$tss_distance)) + 
+  geom_histogram(fill = viridis(79), bins = 80) +
+  theme_minimal()+
+  labs(x = "TSS distance", y = "Counts") +
+  scale_x_continuous(name = "Counts", labels = scales::comma, breaks =c(-1000000, -500000, 0, 500000, 1000000), limits= c(-1000000, 1000000))
+
+pdf("gtex_tss.pdf")
+ggplot(gtextss, aes(x=gtextss$X2)) + 
+  geom_histogram(fill = viridis(79), bins = 80) +
+  theme_minimal()+
+  labs(x = "TSS distance", y = "Counts") +
+  scale_x_continuous(name = "Counts", labels = scales::comma, breaks =c(-1000000, -500000, 0, 500000, 1000000), limits= c(-1000000, 1000000))
+dev.off()
+
+sh <- 'rm TSS*'
+system(sh, intern = TRUE)
+
+```
+
+## Heatmap with distance measures
+```{r heatmap, message = FALSE}
+#Unclumped since the point is to see how similar tissues are when only taking into account HF eQTL (regardless of eQTL specificity or other effects)
+
+#Tidy data + give it long format
+data <- NULL
+data <- lapply(hsap_files, '[', "X9")
+data <- melt(data)
+data <- data %>% 
+  group_by(L1) %>% 
+  summarize(mean(value))
+data <- data[,-1]
+data <- as.data.frame(data)
+
+names <- cleannames(temp)
+names <- stringr::str_replace_all(names, "Brain ", "")
+rownames(data) <- names
+
+test <- dist(data, method = "euclidean")
+test <- dist_setNames(test, names)
+test <- as.matrix(test)
+pdf("dist.pdf")
+pheatmap(test, cluster_cols = TRUE, cluster_rows = TRUE, main = c("Cluster analysis of normalized effect size"))
+dev.off()
+
+
+```
+
+## Clumped tissue-specific variants
+```{r Clumpled unique tissues, message= FALSE}
+#Apply function to selected tissues
+uniq_clumped <- uniq_clump(hsap_files)
+order <- forcats::fct_infreq(uniq_clumped$tissue)
+
+pdf("unique_clumped.pdf")
+ggplot(uniq_clumped, aes(x= forcats::fct_infreq(tissue))) +
+  theme_minimal() +
+  geom_bar(fill = "steelblue") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Tissue specific eQTL") + 
+  scale_x_discrete(drop = FALSE) +
+  labs(y = "Count", x = "Tissue") 
+dev.off()
+
+
+#Correlation test
+GTExPortal <- read_csv("eQTL/GTExPortal.csv")
+statsdf <- NULL
+statsdf$samples <- GTExPortal[4]
+statsdf$nrvars <- uniq_clumped %>% 
+  group_by(tissue) %>% 
+  summarize(n())
+
+#Add adrenal and amygdala, which don't have unique rsids
+statsdf$nrvars <- append(statsdf$nrvars[[2]], c(0,0), after = 0)
+statsdf <- as.data.frame(statsdf)
+rownames(statsdf) <- cleannames(temp)
+
+#Testing for normality
+shapiro.test(statsdf$X..RNASeq.Samples) #normal
+shapiro.test(statsdf$nrvars) #non normal
+
+#Correlation test
+cor.test(statsdf$X..RNASeq.Samples, statsdf$nrvars, method = c("spearman"))
+# Not significant
+pwr.r.test(n = sum(statsdf$nrvars), r = -0-01, sig.level = 0.05)
+#power = 1
+
+#phewas analysis
+#phew <- phewas(uniq_clumped$rsid)
+```
+
+## Fill plot with down and up-regulation proportions
+```{r Fill clumped and unclumped, message = FALSE}
+# Variant 1: Controlling for LD
+clumped <- regular_clump(hsap_files)
+# Note that clumped df contains duplicated rsids
+# actually only 390 unique rsids, out of which ~ 200  are tissue-specific (as per uniq_clumped function)
+clumped <- lapply(hsap_files, function(x) filter(x, X2 %in% clumped$rsid))
+# Substituting df has to have same length as clumped before
+
+divided_clumped <- lapply(clumped, divide)
+all <- NULL
+temp <- cleannames(temp)
+temp <- stringr::str_replace_all(temp, "Brain ", "")
+all$tissue <- temp
+all <- as.data.frame(all)
+divided_clumped <- lapply(divided_clumped[], function(x) lapply(x, '[[', 2))
+
+pdf("figure3B_clumped.pdf")
+divided_clumped <- preplot_count(divided_clumped)
+two <- plot_updown(divided_clumped, "Directionality of regulation - clumped minor ancestral variants")
+dev.off()
+
+# Stats
+print("Clumped data:")
+colnames(divided_clumped)[2] <- c("direction")
+stats_updown1 <- statsdf(divided_clumped)
+chisq.test(stats_updown1,  correct = TRUE) # not significant
+#chisq.posthoc.test(stats_updown1) # not needed
+
+#Unclumped variant of the plot:
+divided <- lapply(hsap_files, divide)
+all <- NULL
+temp <- cleannames(temp)
+all$tissue <- temp
+all <- as.data.frame(all)
+divided <- lapply(divided[], function(x) lapply(x, '[[', 2))
+
+pdf("figure3B_unclumped.pdf")
+divided <- preplot_count(divided)
+one <- plot_updown(divided, "Directionality of regulation - unclumped minor ancestral variants")
+dev.off()
+
+# Stats
+colnames(divided)[2] <- c("direction")
+stats_updown1 <- statsdf(divided)
+print("Unclumped data:")
+chisq.test(stats_updown1,  correct = TRUE) #significant
+
+#Power test
+samp <- c(sum(stats_updown1$Up)+sum(stats_updown1$Down))
+phi <- chisq_to_cohens_w(143.16, samp, 15, 2)
+phi # = w, but non numerical output of function
+pwr.chisq.test(w = 0.13, N= samp, df = 14, sig.level=0.05) #Power = 1
+#Post-hoc residuals analysis
+chisq.posthoc.test(stats_updown1)
+
+```
+
+### Do ancestral major alleles also downregulate expression? (as opposed to ancestral minor alleles)
+First, retrieving those eQTL:
+```{sh Ancestral major alleles retrieval}
+#Get a list of eQTL paired with file name; clean a bit the folder structure with sed
+cd eQTL/materials
+awk '{print $2, FILENAME, $7, $9}' GTEx_Analysis_v8_eQTL/* | sed 's/GTEx.*\///g ; s/\..*out//g' | tail -n +2 > list_eQTL.txt
+#Since data from K&B (2019) already contains a catalog of which sites are different between humans and at least one archaic, a reverse grep of the list of eQTL sites through this database (NNaall.tsv) gives you a list of (in principle) non-derived eQTLs
+# Then filter by MAF in these non Homo sapiens-specific variants
+grep -Po 'rs\d*' NNaall.tsv | grep -vwf - list_eQTL.txt | awk '{if ($3<=0.10) print $0}' > nonderived_eQTL.txt
+rm list_eQTL.txt
+
+# We then have to filter our minor allele frequency to leave the  high frequency ancestral alleles
+```
+
+Now, plotting them:
+```{r Fill major ancestral alleles}
+anc_eQLT <- read_table2("eQTL/materials/nonderived_eQTL.txt", 
+    col_names = FALSE)
+
+anc_eQLT <- anc_eQLT %>% 
+  mutate(direction = ifelse(X4>0,"Up","Down")) %>% 
+  group_by(X2, direction) %>%
+  summarize(value = n())
+
+anc_eQLT$X2 <- cleannames(anc_eQLT$X2)
+anc_eQLT$X2 <- stringr::str_replace_all(anc_eQLT$X2, "Brain ", "")
+
+pdf("hf_ancestral_variants.pdf")
+ggplot() +
+  theme_minimal() +
+  ggtitle("Directionality of regulation - HF ancestral variants")+
+  geom_bar(aes(y = value, x = X2, fill = direction), 
+           data = anc_eQLT, 
+           stat= "identity",
+           position="fill",
+           alpha = 0.75)+
+  labs(y = "Percentage", x = "", fill = "") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = sanzo.duo("c106")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_hline(yintercept=0.50, linetype="dashed") 
+dev.off()
+
+# Are HF eQTL significantly skewed in up/down regulation?
+stats_updown2 <- statsdf(anc_eQLT)
+chisq.test(stats_updown2,  correct = TRUE) # Yes (< 2.2e-16)
+#Power test
+samp <- c(sum(stats_updown2$Up)+sum(stats_updown2$Down))
+phi <- chisq_to_cohens_w(3653.7, samp, 15, 2)
+phi # = w, but non numerical output of function
+pwr.chisq.test(w = 0.05, N= samp, df = 14, sig.level=0.05) #Power = 1
+#Post-hoc residual analysis
+chisq.posthoc.test(stats_updown2) # Most of them
+
+stats_onlydown <- NULL
+stats_onlydown$ancmajor <- stats_updown2$Down
+stats_onlydown$ancminor <- stats_updown1$Down
+# Requires running chunk 4 before
+# Currently corresponds to UNclumped data
+stats_onlydown <- as.data.frame(stats_onlydown)
+rownames(stats_onlydown) <- cleannames(temp)
+# Are proportions in major vs minor downregulating ancestral eQTL significantly different? 
+chisq.test(stats_onlydown,  correct = TRUE) # Yes (< 2.2e-16)
+#Power test
+samp <- c(sum(stats_onlydown$ancmajor)+sum(stats_onlydown$ancminor))
+phi <- chisq_to_cohens_w(333.56, samp, 15, 2)
+phi # = w, but non numerical output of function
+pwr.chisq.test(w = 0.02, N= samp, df = 14, sig.level=0.05) #Power = 1
+chisq.posthoc.test(stats_onlydown) 
+```
+
+
+## Sample size effect on hsap (unclumped)
+```{r Sample size effect, message = FALSE}
+divided <- lapply(hsap_files, divide)
+#Store these in 'all' df
+all <- NULL
+temp <- cleannames(temp)
+all$tissue <- temp
+all <- as.data.frame(all)
+divided <- lapply(divided[], function(x) lapply(x, '[[', 2))
+
+unfilt <- NULL
+for (i in 1:15){
+  unfilt <- append(unfilt, length(divided[[i]][["FALSE"]])+length(divided[[i]][["TRUE"]]))
+}
+
+GTExPortal <- read_csv("eQTL/GTExPortal.csv")
+unfiltnrs <- NULL
+
+unfiltnrs$tissue <- cleannames(temp)
+unfiltnrs$tissue <- stringr::str_replace_all(unfiltnrs$tissue, "Brain ", "")
+unfiltnrs$value <- unfilt
+unfiltnrs$sample <- GTExPortal[[4]]
+unfiltnrs <- as.data.frame(unfiltnrs)
+
+shapiro.test(unfiltnrs$sample) #normal distribution
+shapiro.test(unfiltnrs$value) #slightly unnormal distribution (p-val = 0.02)
+
+# No LD control violates independence assumption, so no tests here
+pdf("figure3c.pdf")
+ggplot(unfiltnrs, aes(x = sample, y= value)) +
+  theme_minimal() +
+  theme(legend.position="top") +
+  labs(y= "Number of eQTL", x = "Sample size") +
+  geom_smooth(alpha = 0.25) +
+  geom_label_repel(aes(label = tissue), label.size = 0.05, box.padding = 0.7) +
+  geom_point(size = 3.5) 
+dev.off()
+
+```
+
+## Sample size effect figure, clumped:
+```{r 3C clumped, messages = FALSE}
+# Controlling for LD
+clumped <- regular_clump(hsap_files)
+clumped <- lapply(hsap_files, function(x) filter(x, X2 %in% clumped$rsid))
+divided_clumped <- lapply(clumped, divide)
+divided_clumped <- lapply(divided_clumped[], function(x) lapply(x, '[[', 2))
+
+unfilt <- NULL
+for (i in 1:15){
+  unfilt <- append(unfilt, length(divided_clumped[[i]][["FALSE"]])+length(divided_clumped[[i]][["TRUE"]]))
+}
+
+GTExPortal <- read_csv("eQTL/GTExPortal.csv")
+unfiltnrs <- NULL
+unfiltnrs$tissue <- cleannames(temp)
+unfiltnrs$tissue <- stringr::str_replace_all(unfiltnrs$tissue, "Brain ", "")
+unfiltnrs$value <- unfilt
+unfiltnrs$sample <- GTExPortal[[4]]
+unfiltnrs <- as.data.frame(unfiltnrs)
+
+pdf("Figure_3C_clumped.pdf")
+ggplot(unfiltnrs, aes(x = sample, y= value)) +
+  theme_minimal() +
+  theme(legend.position="top") +
+  labs(y= "Number of eQTL", x = "Sample size") +
+  geom_smooth(alpha = 0.25) +
+  geom_label_repel(aes(label = tissue), label.size = 0.05, box.padding = 0.7) +
+  geom_point(size = 3.5) +
+  stat_cor(method = "spearman", label.x = 120, label.y = 200,color="black") 
+dev.off()
+
+# Spearman: sample ~ value correlation 
+cor.test(unfiltnrs$sample, unfiltnrs$value, method = "spearman", conf.level = 0.95)
+# Significant, as seen in plot
+# p-value = 1.717e-05
+pwr.r.test(n = 211, r = 0.7363, sig.level = 0.05) #power 1 
+```
+
+
+# Other Analysis
+
+## Variant functional consequences
+Retrieve variants to query Biomart
+```{sh Variants for Biomart}
+cd eQTL/materials
+awk '{print $2}' GTEx_Analysis_v8_eQTL/* | sed 's/,/\n/g' | sort | uniq > snps
+```
+
+
+```{r BiomaRt}
+snps <- read_table("eQTL/materials/snps", col_names = "snps")
+
+ensembl = useEnsembl(biomart="snp", dataset = "hsapiens_snp", GRCh = 37)
+
+result <- getBM(attributes=c('consequence_type_tv', 'refsnp_id'),
+  filters = 'snp_filter',
+  values = snps$snps,
+  mart = ensembl)
+write.csv(result, "eQTL/materials/result.csv")
+```
+
+BiomaRt is not very good with large queries, so if you find that the package crashes at any point of the batch submision, or it takes too long, another option would be to run the following code chunk. Note that the subsequent code in the section is based on the results given by the biomaRt package, and, thought the data itself shouldn't vary, we warn that there might be differences given the way JSON queries are returned:
+
+```{r BiomaRt REST}
+library(httr)
+library(jsonlite)
+library(xml2)
+
+server <- "https://grch37.rest.ensembl.org"
+prefix <- "/variation/human/"
+
+getconsequence <- function(rsid){
+  query <- paste0(prefix, rsid, "?")
+   r <- GET(paste0(server,query), content_type("application/json"))
+   stop_for_status(r)
+   return(data.frame(t(sapply(content(r),c))))
+}
+
+l <- NULL
+for (rsid in snps$snps){
+  result <- getconsequence(rsid)
+  l[[rsid]] <- result
+}
+```
+
+From the queried snps, get only those that are NOT in HF
+```{sh Get noHF snps}
+cd eQTL/materials
+
+grep -Po "rs\d*" result.csv | grep -vwf hfsapiens.freqfilt.tsv -  > result_noHF.csv
+rm result.csv
+```
+
+
+```{r BiomaRt non HF}
+result_noHF <- read_table2("eQTL/materials/result_noHF.csv",
+                           col_types = cols(POS = col_character()))
+#NA ommited
+
+result_noHF.noNA <- na.omit(result_noHF$dbSNP) 
+
+dist <- result_noHF.noNA %>% 
+  group_by(consequence) %>% 
+  dplyr::summarize(count = n())
+
+dist$consequence <- str_replace_all(dist$consequence, "_", " ")
+dist$consequence <- str_to_title(dist$consequence)
+dist$consequence <-factor(dist$consequence, levels = dist$consequence[order(dist$count)])
+dist$count <- as.factor(dist$count)
+
+ggplot(dist, aes(x = consequence, y = count)) +
+  theme_minimal() +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  scale_colour_viridis_d() +
+  coord_flip() +
+  labs(x = "Variant consequence", y = "Nr. of eQTL loci") +
+  theme(axis.text.x = element_text(angle = 90)) 
+
+#Chi-square test of independence
+#Data as in dist (all eQTL, without the high freq ones & (HF, Homo Sapiens specific eQTL variants only)
+#More categories in the first one than the second: 
+#Only the second set of categories (present in HF variants and non-HF variants) is subjected to testing here 
+dist_chi <- data.frame("Features" = c("intron", 
+                                      "non coding transcript",
+                                      "NMD transcript",
+                                      "non coding trans exon var",
+                                      "3prime UTR",
+                                      "5prime UTR",
+                                      "Missense",
+                                      "Synonymous",
+                                      "Splice reg",
+                                      "Stop lost"),
+                       "All_eQTL_minusHF" = c(998774,576017,282909,59840,37243, 12846,12334,11814,3938,417), 
+                       "HS_HF_eQTL" = c(3453,2190,843,277,131,98,56,47,16,1))
+chisq.test(dist_chi[2:3], correct = TRUE)
+
+#Power test
+samp <- c(sum(dist_chi[2])+sum(dist_chi[3]))
+phi <- chisq_to_cohens_w(121.72, samp, 10, 2)
+phi # = w, but non numerical output of function
+pwr.chisq.test(w = 7.79e-03, N= samp, df = 9, sig.level=0.05) #Power = 1
+
+#Post-hoc analysis
+chisq.posthoc.test(dist_chi[2:3], method = "bonferroni")
+```
+
+
+## Random sampling analysis
+Is the number of tissue-specific eQTL variants independent of sample size bias?
+
+```{r Random sampling}
+data <- NULL
+data <- lapply(hsap_files, '[', "X2")
+temp <- cleannames(temp)
+names(data) <- temp
+data <- melt(data)
+data <- unique(data)
+
+#Factors
+data <- mutate(data, L1 = factor(L1, ordered=T))
+
+#Gets unique elements for each tissue
+uniq <- data %>%  
+  full_join(data, by="X2") %>% 
+  group_by(X2) %>% 
+  filter(n() == 1)  
+
+uniq <- uniq_clump(hsap_files)
+#GTExPortal <- read_csv("eQTL/GTExPortal.csv")
+
+#Collecting random samples
+sampling <- function (n) {
+  samp <- sample(n[[2]], 100, replace = FALSE)
+  sum(samp %in% uniq[[1]])
+}
+
+sampled <- lapply(hsap_files, sampling)
+sampled <- unlist(sampled)
+sampled <- as.data.frame(sampled)
+sampled$nonuniq <- 100-sampled$sampled
+rownames(sampled) <- cleannames(temp)
+sampled <- sampled %>% 
+  relocate(sampled, .after = nonuniq)
+
+chisq.test(sampled)
+#Power test
+samp <- c(sum(sampled[1])+sum(sampled[2]))
+phi <- chisq_to_cohens_w(129.35, samp, 15, 2)
+phi # = w, but non numerical output of function
+pwr.chisq.test(w = 0.29, N= samp, df = 14, sig.level=0.05) #Power = 1
+chisq.posthoc.test(sampled)
+```
+
+
+## Total ammount of variance
+Is the number of HF eQTL dependent on total amount of variance for all tissues?
+
+```{r Total variance}
+#Setting up object for table
+statsdf <- NULL
+
+sh <- 'wc -l eQTL/hsap/* | awk \'{print $1}\' | head -n -1'
+statsdf$hf_hsap <- system(sh, intern = TRUE)
+
+sh <- 'wc -l eQTL/materials/GTEx_Analysis_v8_eQTL/* | awk \'{print $1}\' | head -n -1'
+statsdf$total <- system(sh, intern = TRUE)
+
+statsdf <- lapply(statsdf, as.numeric)
+#Check is same order of files
+hs_files <- list.files(path = "eQTL/hsap/", pattern="*")
+total_files <- list.files(path = "eQTL/materials/GTEx_Analysis_v8_eQTL/", pattern="*")
+hs_files <- cleannames(hs_files)
+total_files <- cleannames(total_files)
+hs_files == total_files 
+#Should give TRUE
+
+
+# Minus successes (=hf homo sapiens-specific variants)
+statsdf$total <- as.numeric(statsdf$total)-as.numeric(statsdf$hf_hsap)
+statsdf$total
+
+# Add names of tissues 
+statsdf <- as.data.frame(statsdf)
+rownames(statsdf) <- hs_files
+
+chisq.test(statsdf, correct=TRUE) 
+#Significant  
+#Power test
+samp <- c(sum(statsdf[1])+sum(statsdf[2]))
+phi <- chisq_to_cohens_w(577.89, samp, 15, 2)
+phi # = w, but non numerical output of function
+pwr.chisq.test(w = 6.59e-03, N= samp, df = 14, sig.level=0.05) #Power = 1
+
+chisq.posthoc.test(statsdf)
+#Significant for about half the tissues, so not only one driving the effect 
+```
+
+## H test
+
+Selection test that doesn't require an archaic sample:
+```{sh Fay and Wu s H (shell)}
+cd eQTL
+mkdir FayWuH
+cd FayWuH
+wget http://hsb.upf.edu/hsb_data/positive_selection_NAR2013/FayWuH_CEU.whole_genome.pvalues.gz
+wget http://hsb.upf.edu/hsb_data/positive_selection_NAR2013/FayWuH_CHB.whole_genome.pvalues.gz
+wget http://hsb.upf.edu/hsb_data/positive_selection_NAR2013/FayWuH_YRI.whole_genome.pvalues.gz
+```
+
+```{r Fay and Wu s H (R), message=FALSE}
+CEU <- read_table2("eQTL/FayWuH/FayWuH_CEU.whole_genome.pvalues.gz")
+CHB <- read_table2("eQTL/FayWuH/FayWuH_CHB.whole_genome.pvalues.gz")
+YRI <- read_table2("eQTL/FayWuH/FayWuH_YRI.whole_genome.pvalues.gz")
+
+# P-values are in -log10 scale
+# That means a higher than 2 score in the pvalue column = a < 0.01 p-value
+filterpval <- function(popfile){ 
+  popfile <- popfile %>% 
+    filter(pvalue > 2) %>% 
+    select(chromosome, start, end, score, pvalue)
+  as.data.frame(popfile)
+}
+
+CEU <- filterpval(CEU)
+CHB <- filterpval(CHB)
+YRI <- filterpval(YRI)
+
+
+#Prepare eQTL bed-like dataframe
+data <- lapply(hsap_files, '[', "X1")
+temp <- cleannames(temp)
+names(data) <- temp
+data <- melt(data)
+data <- data %>% 
+  separate(X1, sep = "_", into = c("chr","start","alleleA","alleleB","erase")) %>% 
+  select(chr, start, L1)
+
+data$end <- data$start
+data <- data[, c(1,2,4,3)]
+
+CEUeqtl <- overlapRegions(CEU, data)
+CHBeqtl <- overlapRegions(CHB, data)
+YRIeqtl <- overlapRegions(YRI, data)
+#No overlaps
+```
+
+## MAF of SNPs overlapping and not overlapping w/ eQTL
+
+```{sh MAF eQTL}
+#Get a list of eQTL with MAF (already in file)
+cd eQTL/materials
+rm list_eQTL.txt #list_eQTL.txt already exists in folder, but with a 10% filter for - ensure it's not used for previous chunks
+awk '{print $2, $7}' GTEx_Analysis_v8_eQTL/* | grep -v "maf" | sort | uniq > list_eQTL.txt
+head list_eQTL.txt
+
+#Pre not-an-eQTL filtering ; that'll be done in the R chunk
+awk '$19 ~ /rs[:digit:]*/ {print $19, $2}' NNaall.tsv | sed 's/\,.*//g' > list_NNaallrsids.txt
+
+```
+
+``` {r MAF eQTL}
+list_eQTL <- read_table2("eQTL/materials/list_eQTL.txt", 
+    col_names = FALSE)
+
+NNaall_prefilt <- read_table2("eQTL/materials/list_NNaallrsids.txt", 
+    col_names = FALSE)
+
+no_eQTL <- NNaall_prefilt %>% 
+  filter(!(X1 %in% eQTL$X1))
+yes_eQTL <- NNaall_prefilt %>% 
+  filter(X1 %in% eQTL$X1)
+
+no_eQTL <- na.omit(no_eQTL)
+yes_eQTL <- na.omit(yes_eQTL)
+
+#around 10% mean difference
+mean(no_eQTL$X2) #0.3228581
+mean(yes_eQTL$X2) #0.429301
+
+#Controlling for size
+set.seed(1)
+test <- sample_n(no_eQTL, length(yes_eQTL$X1))
+```
+
+## GO analysis
+With clumped data to avoid noise.
+
+```{r GO}
+clumped <- regular_clump(hsap_files)
+
+
+results_clumpedGO <- NULL
+results_clumpedGO <- gost(query = clumped$rsid,
+     organism = "hsapiens", ordered_query = FALSE,
+     multi_query = FALSE, significant = TRUE, exclude_iea = FALSE,
+     measure_underrepresentation = FALSE, evcodes = FALSE,
+     user_threshold = 0.05, correction_method = "g_SCS",
+     domain_scope = "annotated", custom_bg = NULL,
+     numeric_ns = "", sources = NULL, as_short_link = FALSE)
+
+
+data <- NULL
+query <- data.table::rbindlist(lapply(hsap_files, `[`, 2))
+results_unclumpedGO <- NULL
+results_unclumpedGO <- gost(query = query$X2,
+     organism = "hsapiens", ordered_query = FALSE,
+     multi_query = FALSE, significant = TRUE, exclude_iea = FALSE,
+     measure_underrepresentation = FALSE, evcodes = FALSE,
+     user_threshold = 0.05, correction_method = "g_SCS",
+     domain_scope = "annotated", custom_bg = NULL,
+     numeric_ns = "", sources = NULL, as_short_link = FALSE)
+
+#How about cerebellum unique SNPs in particular?
+uniq_clumped <- uniq_clump(hsap_files)
+test <- uniq_clumped %>% 
+  group_by(tissue) %>%  
+  filter(tissue == "Brain Cerebellum") %>% 
+  dplyr::select(rsid)
+
+result <- gsnpense(query = test[[2]])
+
+
+results_clumpedGO <- gost(query = result$ensgs,
+                          organism = "hsapiens", ordered_query = FALSE,
+                          multi_query = FALSE, significant = TRUE, exclude_iea = FALSE,
+                          measure_underrepresentation = FALSE, evcodes = FALSE,
+                          user_threshold = 0.05, correction_method = "g_SCS",
+                          domain_scope = "annotated", custom_bg = NULL,
+                          numeric_ns = "", sources = NULL, as_short_link = FALSE)
+
+
+
+```
+
+
+## Colocalization analysis
+Change the annotated line to test for other traits. The following IDs were tested:
+ieu-a-806 # autism
+prot-a-498 # cerebral dopamine
+ubm-a-164 # IDP T1 FAST ROIs R cerebellum X
+ubm-a-150 #IDP T1 FAST ROIs R cerebellum
+ieu-b-32 # lymphocyte cell count
+ukb-b-14699 # Alzheimer's disease
+ubm-a-2659 , ubm-a-2658, ubm-a-2676, ubm-a-2677 # Cerebellar volume
+
+```{r Colocalization}
+#Modify eQTL dataframe
+clumped <- uniq_clump(hsap_files) 
+clumped <- lapply(hsap_files, function(x) filter(x, X2 %in% clumped$rsid))
+clumped <- lapply(clumped, rbind)
+clumped <- bind_rows(clumped)
+
+gwas <- phewas(clumped$X2, pval = 0.0001)
+
+total <- separate(clumped, col = X1, into= c("chr","pos", "ref", "alt", "ver"), sep = "[_]")
+total$chr <- str_replace_all(total$chr, "chr", "")
+colnames(total)[6] <- c("rsid")
+
+
+colocal_quick <- function(instrum){
+# Extract results GWAS
+  top <- extract_instruments(outcomes=instrum, clump = FALSE, p1 = 0.0001)
+  colnames(top) <- stringr::str_replace_all(colnames(top), ".exposure", "")
+  colnames(top)[8] <- c("rsid")
+  #Example with schizophrenia (phewas)
+  #top <- ieugwasr::tophits('ieu-b-42', clump = 0, pval = 5e-04) %>% dplyr::arrange(p)
+  #Merge!
+  input <- merge(top, total, by="rsid", all=FALSE, suffixes=c("eqtl","gwas"))
+  return(input)
+}
+
+test <- colocal_quick('prot-a-2235') #substitute ID for relevant instrument
+
+my.res <- coloc.abf(dataset1=list(beta=input$beta, varbeta=input$se, N=nrow(top),type="quant"),
+                    dataset2=list(beta=input$X7, varbeta=input$X7, N=nrow(total),type="quant"),
+                    MAF=input$eaf)
+
+# Position of top variant
+chrpos <- paste0(input$chr[1], ":", input$position[1] - 90000, "-", input$position[1] + 90000)
+
+temp <- coloc_to_gassocplot(my.res)
+gassocplot::stack_assoc_plot(temp$markers, temp$z, temp$corr, traits=temp$traits)
+
+```
+
+## Regions of evolutionary significance
+Gene name retrieval:
+
+```{sh Gene names selection}
+cat eQTL/hsap/*.rs > all.rs
+
+awk '{print $1, $2, $3}' all.rs | sed 's/_/ /g' | awk 'NR>1 {print $1, $2-1, $2, $6, $7}' | sed 's/\s/\t/g' > coords.bed
+# $2-1 due to the reasons explained here: https://bedtools.readthedocs.io/en/latest/content/overview.html#bed-starts-are-zero-based-and-bed-ends-are-one-based  
+
+#Download the positive selections tables formatter for your convenience
+#You can retrieve them if you'd prefer from the supplementary information of the two studies
+wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1LBr_oepH8yhveTuz1w7rd3Jznnqp-iw1' -O racimo_coords.txt
+wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1IY2NCdCsgW_Mj48ygTVzOaXw7ag-CN0P' -O pey_coords.txt
+
+bedtools intersect -a coords.bed -b pey_coords.txt > ps_pey
+bedtools intersect -a coords.bed -b racimo_coords.txt > ps_rac
+rm all.rs racimo_coords.txt pey_coords.txt coords.bed
+```
+
+```{r Gene names selection}
+library(gprofiler2)
+library(readr)
+
+#Peyregne
+table_peyregne <- read_delim("ps_pey", "\t", 
+                     escape_double = FALSE, col_names = FALSE, 
+                     trim_ws = TRUE)
+
+#Residing gene names retrieval
+table_peyregne$X5 <- gsub("[.]\\d*$", "", table_peyregne$X5)
+result_query <- gconvert(query = table_peyregne$X5,
+         organism = "hsapiens",
+         target = "ENSG",
+         filter_na = TRUE)
+table_peyregne$eGene <- c(result_query$name)
+    
+result_query <- gconvert(query = table_peyregne$X4,
+                    organism = "hsapiens",
+                    target = "ENSG",
+                    filter_na = FALSE)
+table_peyregne$target <- c(result_query$name)
+
+
+#Racimo
+table_racimo <- read_delim("ps_rac", "\t", 
+                     escape_double = FALSE, col_names = FALSE, 
+                     trim_ws = TRUE)
+table_racimo$X5 <- gsub("[.]\\d*$", "", table_racimo$X5)
+result_query <- gconvert(query = table_racimo$X5,
+                    organism = "hsapiens",
+                    target = "ENSG",
+                    filter_na = TRUE)
+table_racimo$eGene <- c(result_query$name)
+
+result_query <- gconvert(query = table_racimo$X4,
+         organism = "hsapiens",
+         target = "ENSG",
+         filter_na = TRUE)
+
+table_racimo$target  <- ifelse(table_racimo$X4 %in% result_query$input, 
+       result_query$name, 
+       NA)
+```
+
+
+Now, as for the permutation tests:
+
+```{sh Permutation tests}
+cat eQTL/hsap/*.rs | awk '{print $1, $2, $9}' | sed 's/.*chr/hs/g' | sed 's/\_/ /g' | awk '{print $1, $2, $2, $7}' | sed -e 's/\s/\t/g' | awk '{print $1, $2, $3}' | sed 's/hs/chr/g' > snppermut.txt
+
+wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1LBr_oepH8yhveTuz1w7rd3Jznnqp-iw1' -O racimo_coords.txt
+wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1IY2NCdCsgW_Mj48ygTVzOaXw7ag-CN0P' -O pey_coords.txt
+
+sed 's/hs/chr/g' racimo_coords.txt > racimo_perm
+sed 's/hs/chr/g' pey_coords.txt > pey_perm
+rm pey_coords.txt racimo_coords.txt
+```
+
+```{r Permutation tests}
+pey <- read_table2("pey_perm", col_names = FALSE)
+pey <- as.data.frame(pey)
+pey <- toGRanges(pey)
+
+racimo <- read_table2("racimo_perm", col_names = FALSE)
+racimo <- as.data.frame(racimo)
+racimo <- toGRanges(racimo)
+
+data <- read_table2("snppermut.txt")
+data <- as.data.frame(data)
+data <- toGRanges(data)
+
+#S4Vectors has deprecated a function needed for regioneR: make sure to use version 0.29.1 of S4Vectors
+#remotes::install_github("Bioconductor/S4Vectors@2f2e26d8a1b58546d2e05672e28f41aba2ee0258")
+
+pt1 <- permTest(A=data, B=pey, ntimes=1000,
+                randomize.function=circularRandomizeRegions,
+                evaluate.function=numOverlaps, mc.set.seed=TRUE, force.parallel=TRUE
+)
+pt2 <- permTest(A=data, B=racimo, ntimes=1000,
+                randomize.function=circularRandomizeRegions,
+                evaluate.function=numOverlaps, mc.set.seed=TRUE, force.parallel=TRUE)
+
+pt1
+#expected: mean(pt1[["numOverlaps"]][["permuted"]])
+pt2
+#expected: mean(pt2[["numOverlaps"]][["permuted"]])
+
+pdf("peyregne_perm.pdf")
+plot(pt1, plotType="Tailed")
+dev.off()
+
+pdf("racimo_perm.pdf")
+plot(pt2, plotType="Tailed")
+dev.off()
+```
+
+Per tissue testing: are some tissues more prone to be represented in these positive selection regions?
+```{r Overlap positive selection}
+pey <- read_table2("pey_perm", col_names = FALSE)
+pey <- as.data.frame(pey)
+pey <- toGRanges(pey)
+
+racimo <- read_table2("racimo_perm", col_names = FALSE)
+racimo <- as.data.frame(racimo)
+racimo <- toGRanges(racimo)
+
+data <- read_table2("snppermut.txt")
+data <- as.data.frame(data)
+data <- toGRanges(data)
+
+listhf <- hsap_files %>% 
+  melt(.) %>% 
+  dplyr::select(X1, L1) 
+
+#Renames tissues
+names <- cleannames(temp)
+renametiss <- function(x, y) {
+  str_replace_all(x, paste0("^",y,"$"), names[y])
+}
+# For loop to iterate over L1 list index numbers
+for (n in c(1:15)) {
+  listhf$L1 <- renametiss(listhf$L1,n)
+}
+
+listhf <- separate(listhf, col = X1, into= c("chr","pos", "ref", "alt", "ver"), sep = "[_]")
+#Remove duplicated columns - not taking into account multiple genes affected by one eQTL
+listhf <- unique(listhf)
+
+#Overlaps, and table with more common tissues in tiss_pey
+overlap_pey <- overlapRegions(data,pey)
+tiss_pey <- listhf %>% 
+  filter((listhf$chr %in% overlap_pey$chr) & (listhf$pos %in% overlap_pey$startA))
+tiss_pey <- melt(table(tiss_pey$L1))
+
+overlap_rac <- overlapRegions(data,racimo)
+tiss_rac <- listhf %>% 
+  filter((listhf$chr %in% overlap_rac$chr) & (listhf$pos %in% overlap_rac$startA))
+tiss_rac <- melt(table(tiss_rac$L1))
+
+#dataframe to plot
+plot <- NULL
+plot$Peyregne <- tiss_pey$value
+plot$Racimo <- tiss_rac$value
+plot <- as.data.frame(plot)
+names <- stringr::str_replace_all(names, "Brain ", "")
+plot$tissues <- names
+plotm <- melt(plot)
+
+pdf("eQTLpossel.pdf")
+ggplot(plotm, aes(x=tissues, y=value, color=variable)) + 
+  theme_minimal() +
+  geom_point(size=2) +
+  ggtitle("eQTL in regions of positive selection") +
+  labs(y = "Count", x = "Tissues", color = "Study") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+dev.off()
+
+pdf("eQTLpossel2.pdf")
+plotm <- plotm %>% mutate(tissues = factor(tissues),  tissues = factor(tissues, levels = rev(levels(tissues))))
+one <- ggplot(plotm,aes(x= tissues,y=value, fill = variable))+
+		theme_minimal() +
+		geom_bar(stat="identity", position = "dodge") +
+		labs(title="Overlapping eQTL",
+		 x = "Count",
+	 	y = "Structures", 
+	 	fill = "") +
+		scale_fill_discrete(labels=c("Peyregné","Racimo"))+ # check this
+    coord_flip()
+dev.off()
+
+plot
+
+#Statistics: 
+#First, controlling for the difference in window sizes between the two studies
+#Import again
+pey <- read_table2("pey_perm", col_names = FALSE)
+pey <- as.data.frame(pey)
+racimo <- read_table2("racimo_perm", col_names = FALSE)
+racimo <- as.data.frame(racimo)
+
+proportion <- sum(racimo$X3-racimo$X2)/sum(pey$X3-pey$X2)
+plot$Racimo <- plot$Racimo/proportion
+
+test <- wilcox.test(plot$Peyregne,
+            plot$Racimo,
+            paired=TRUE) #6.104e-05
+test
+
+#Power test for wilcoxon
+shiehpow(sum(plot$Peyregne), sum(plot$Racimo), p=6.104e-05, dist = "norm") 
+# shieh power:1
+
+#Is cerebellum eQTL number not variable in the two studies compared to the rest of tissues?
+diff <- plot$Peyregne-plot$Racimo
+plot$diff <- diff
+plot(plot$diff)
+
+test <- dunnTest(value ~ tissues, data=plotm, method="bh")
+test 
+
+#Are selection tests coinciding in particular eQTL?
+overlap_pey <- overlapRegions(data,pey)
+tiss_pey <- listhf %>% 
+  filter((listhf$chr %in% overlap_pey$chr) & (listhf$pos %in% overlap_pey$startA))
+
+overlap_rac <- overlapRegions(data,racimo)
+tiss_rac <- listhf %>% 
+  filter((listhf$chr %in% overlap_rac$chr) & (listhf$pos %in% overlap_rac$startA))
+
+bothstudies <- tiss_rac %>% 
+  filter((tiss_rac$chr %in% tiss_pey$chr) & (tiss_rac$pos %in% tiss_pey$pos))
+
+
+```
